@@ -17,11 +17,10 @@ webshell密码a
 
 v2017
 
-持续更新...
 
 ## 遵守《网络安全法》，请勿用于非法用途
 
-## Referrer
+## Reference
 https://github.com/NS-Sp4ce/TongDaOA-Fake-User
 
 https://github.com/jas502n/OA-tongda-RCE
